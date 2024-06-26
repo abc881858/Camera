@@ -129,7 +129,7 @@ void CameraClient::readServer()
             QImage image(640, 480, QImage::Format_RGB32);
             image.loadFromData(payload, "PNG");
             qDebug() << "Image received, messageId:" << m_header.messageId << "Image size:" << image.size();
-            emit send_image(image);
+            emit image_signal(image);
             break;
         }
         default:

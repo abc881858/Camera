@@ -110,583 +110,6 @@ signals:
 
 
 
-> 下面的代码已经上传到 github https://github.com/abc881858/Camera
-
-**Server 端代码如下**
-
-```cpp
-//camerasever.pro
-QT += core gui network
-CONFIG += c++17 cmdline
-SOURCES += cameraserver.cpp main.cpp
-HEADERS += cameraserver.h packet.h
-```
-
-```cpp
-//packet.h
-#pragma once
-
-#include <QObject>
-
-enum MessageType {
-    SET_PARAM = 0x01,
-    GET_PARAM = 0x02,
-    GET_IMAGE = 0x03
-};
-
-struct PacketHeader {
-    quint8 fixedByte{0};
-    quint8 messageType{0};
-    quint16 messageId{0};
-    quint32 payloadLength{0};
-};
-```
-
-```cpp
-//main.cpp
-#include <QCoreApplication>
-#include "cameraserver.h"
-
-int main(int argc, char *argv[]) {
-    QCoreApplication a(argc, argv);
-    CameraServer server;
-    server.listen(QHostAddress::AnyIPv4, 27000);
-    return a.exec();
-}
-```
-
-```cpp
-//cameraserver.h
-#pragma once
-
-#include <QBuffer>
-#include <QDataStream>
-#include <QDebug>
-#include <QImage>
-#include <QMap>
-#include <QTcpServer>
-#include <QTcpSocket>
-#include "packet.h"
-
-class CameraServer : public QTcpServer {
-    Q_OBJECT
-public:
-    CameraServer(QObject *parent = nullptr);
-    void sendParam(const QString &paramName);
-    void sendImage();
-protected:
-    void incomingConnection(qintptr socketDescriptor) override;
-private:
-    QTcpSocket *m_socket;
-    QByteArray m_buffer;
-    quint16 m_message_id{0};
-    PacketHeader m_header;
-    bool m_reading_header{true};
-    QMap<QString, QString> parameters;
-private slots:
-    void readClient();
-    void discardClient();
-    void setParam(const QString &paramName, const QString &paramValue);
-};
-```
-
-```cpp
-//cameraserver.cpp
-#include "cameraserver.h"
-
-CameraServer::CameraServer(QObject *parent) : QTcpServer(parent), m_socket(nullptr) {
-    parameters["brightness"] = "50";
-    parameters["contrast"] = "50";
-}
-
-void CameraServer::incomingConnection(qintptr socketDescriptor) {
-    if (m_socket) {
-        m_socket->disconnectFromHost();
-    }
-    m_socket = new QTcpSocket(this);
-    m_socket->setSocketDescriptor(socketDescriptor);
-    connect(m_socket, &QTcpSocket::readyRead, this, &CameraServer::readClient);
-    connect(m_socket, &QTcpSocket::disconnected, this, &CameraServer::discardClient);
-}
-
-void CameraServer::readClient() {
-    m_buffer.append(m_socket->readAll());
-    if (m_reading_header && m_buffer.size() >= 8) {
-        QDataStream headerStream(m_buffer);
-        headerStream.setByteOrder(QDataStream::BigEndian);
-        headerStream >> m_header.fixedByte;
-        if (m_header.fixedByte != 0x27) {
-            qDebug() << "Invalid fixed byte:" << m_header.fixedByte;
-            return;
-        }
-        headerStream >> m_header.messageType;
-        headerStream >> m_header.messageId;
-        headerStream >> m_header.payloadLength;
-        m_reading_header = false;
-        m_buffer.remove(0, 8);
-    }
-
-    if (!m_reading_header && m_buffer.size() >= int(m_header.payloadLength)) {
-        QByteArray payload = m_buffer.left(m_header.payloadLength);
-        m_buffer.remove(0, m_header.payloadLength);
-        QDataStream payloadStream(payload);
-        payloadStream.setByteOrder(QDataStream::BigEndian);
-        switch (m_header.messageType) {
-        case SET_PARAM: {
-            QString paramName;
-            QString paramValue;
-            payloadStream >> paramName >> paramValue;
-            setParam(paramName, paramValue);
-            break;
-        }
-        case GET_PARAM: {
-            QString paramName;
-            payloadStream >> paramName;
-            sendParam(paramName);
-            break;
-        }
-        case GET_IMAGE: {
-            sendImage();
-            break;
-        }
-        default:
-            qDebug() << "Unknown message type:" << m_header.messageType;
-        }
-        m_header.fixedByte = 0;
-        m_header.messageType = 0;
-        m_header.messageId = 0;
-        m_header.payloadLength = 0;
-        m_reading_header = true;
-    }
-}
-
-void CameraServer::discardClient() {
-    m_socket->deleteLater();
-    m_socket = nullptr;
-}
-
-void CameraServer::setParam(const QString &paramName, const QString &paramValue) {
-    parameters[paramName] = paramValue;
-}
-
-void CameraServer::sendParam(const QString &paramName) {
-    if (!m_socket) return;
-    QString paramValue = parameters.value(paramName, "unknown");
-    QByteArray payload;
-    QDataStream tmp(&payload, QIODevice::WriteOnly);
-    tmp.setByteOrder(QDataStream::BigEndian);
-    tmp << paramName << paramValue;
-    QByteArray response;
-    QDataStream stream(&response, QIODevice::WriteOnly);
-    stream.setByteOrder(QDataStream::BigEndian);
-    stream << quint8(0x27) << quint8(0x02) << quint16(++m_message_id) << quint32(payload.size());
-    m_socket->write(response);
-    m_socket->write(payload);
-    m_socket->flush();
-}
-
-void CameraServer::sendImage() {
-    if (!m_socket) return;
-    QImage image(640, 480, QImage::Format_RGB32);
-    image.fill(Qt::blue);
-    QByteArray payload;
-    QBuffer buffer(&payload);
-    image.save(&buffer, "PNG");
-    QByteArray response;
-    QDataStream stream(&response, QIODevice::WriteOnly);
-    stream.setByteOrder(QDataStream::BigEndian);
-    stream << quint8(0x27) << quint8(0x03) << quint16(++m_message_id) << quint32(payload.size());
-    m_socket->write(response);
-    m_socket->write(payload);
-    m_socket->flush();
-}
-```
-
-**Client 端代码如下**
-
-【cameraclient.pro】
-
-```cpp
-QT += core gui widgets network
-
-CONFIG += c++17
-
-SOURCES += \
-    cameraclient.cpp \
-    main.cpp \
-    mainwindow.cpp
-
-HEADERS += \
-    cameraclient.h \
-    mainwindow.h \
-    packet.h
-
-FORMS += \
-    mainwindow.ui
-```
-
-【packet.h】
-
-```cpp
-#pragma once
-
-#include <QObject>
-
-enum MessageType {
-    SET_PARAM = 0x01,
-    GET_PARAM = 0x02,
-    GET_IMAGE = 0x03
-};
-
-struct PacketHeader {
-    quint8 fixedByte{0};
-    quint8 messageType{0};
-    quint16 messageId{0};
-    quint32 payloadLength{0};
-};
-```
-
-【main.cpp】
-
-```cpp
-#include "mainwindow.h"
-#include <QApplication>
-
-int main(int argc, char *argv[]) {
-    QApplication a(argc, argv);
-    MainWindow w;
-    w.show();
-    return a.exec();
-}
-```
-
-【mainwindow.h】
-
-```cpp
-#pragma once
-
-#include <QMainWindow>
-#include "cameraclient.h"
-
-QT_BEGIN_NAMESPACE
-namespace Ui { class MainWindow; }
-QT_END_NAMESPACE
-
-class MainWindow : public QMainWindow {
-    Q_OBJECT
-public:
-    MainWindow(QWidget *parent = nullptr);
-    ~MainWindow();
-private:
-    Ui::MainWindow *ui;
-    CameraClient *m_camera_client;
-public slots:
-    void send_image(QImage image);
-    void brightness_slot(QString str);
-private slots:
-    void on_pushButton_clicked();
-    void on_pushButton_2_clicked();
-    void on_pushButton_3_clicked();
-    void on_pushButton_4_clicked();
-};
-```
-
-【mainwindow.cpp】
-
-```cpp
-#include "mainwindow.h"
-#include "ui_mainwindow.h"
-
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow) {
-    ui->setupUi(this);
-    m_camera_client = new CameraClient;
-    connect(m_camera_client, &CameraClient::send_image, this, &MainWindow::send_image);
-    connect(m_camera_client, &CameraClient::brightness_signal, this, &MainWindow::brightness_slot);
-}
-
-MainWindow::~MainWindow() {
-    delete ui;
-}
-
-void MainWindow::on_pushButton_clicked() {
-    m_camera_client->connectToServer("127.0.0.1", 27000);
-}
-
-void MainWindow::on_pushButton_2_clicked() {
-    m_camera_client->requestImage();
-}
-
-void MainWindow::on_pushButton_3_clicked() {
-    m_camera_client->setParam("brightness", QString::number(ui->spinBox->value()));
-}
-
-void MainWindow::on_pushButton_4_clicked() {
-    m_camera_client->getParam("brightness");
-}
-
-void MainWindow::send_image(QImage image) {
-    ui->label->setPixmap(QPixmap::fromImage(image));
-}
-
-void MainWindow::brightness_slot(QString str) {
-    ui->spinBox->setValue(str.toInt());
-}
-```
-
-【mainwindow.ui】
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<ui version="4.0">
- <class>MainWindow</class>
- <widget class="QMainWindow" name="MainWindow">
-  <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>800</width>
-    <height>600</height>
-   </rect>
-  </property>
-  <property name="windowTitle">
-   <string>MainWindow</string>
-  </property>
-  <widget class="QWidget" name="centralwidget">
-   <layout class="QVBoxLayout" name="verticalLayout">
-    <item>
-     <widget class="QWidget" name="widget" native="true">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-      <layout class="QHBoxLayout" name="horizontalLayout">
-       <item>
-        <widget class="QPushButton" name="pushButton">
-         <property name="text">
-          <string>connect</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="pushButton_2">
-         <property name="text">
-          <string>request image</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="pushButton_3">
-         <property name="text">
-          <string>setParam</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="pushButton_4">
-         <property name="text">
-          <string>getParam</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QSpinBox" name="spinBox">
-         <property name="suffix">
-          <string/>
-         </property>
-         <property name="prefix">
-          <string>brightness: </string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <spacer name="horizontalSpacer">
-         <property name="orientation">
-          <enum>Qt::Horizontal</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>40</width>
-           <height>20</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-      </layout>
-     </widget>
-    </item>
-    <item>
-     <widget class="QLabel" name="label">
-      <property name="text">
-       <string/>
-      </property>
-     </widget>
-    </item>
-   </layout>
-  </widget>
- </widget>
- <resources/>
- <connections/>
-</ui>
-```
-
-【cameraclient.h】
-
-```cpp
-#pragma once
-
-#include <QBuffer>
-#include <QDataStream>
-#include <QDebug>
-#include <QHostAddress>
-#include <QImage>
-#include <QTcpSocket>
-#include "packet.h"
-
-class CameraClient : public QObject
-{
-    Q_OBJECT
-public:
-    CameraClient(QObject *parent = nullptr);
-    void connectToServer(const QString &host, quint16 port);
-    void requestImage();
-    void setParam(const QString &paramName, const QString &paramValue);
-    void getParam(const QString &paramName);
-private:
-    QTcpSocket *m_socket;
-    QByteArray m_buffer;
-    quint16 m_message_id{0};
-    PacketHeader m_header;
-    bool m_reading_header{true};
-private slots:
-    void connected();
-    void readServer();
-signals:
-    void send_image(QImage);
-    void brightness_signal(QString);
-};
-```
-
-【cameraclient.cpp】
-
-```cpp
-#include "cameraclient.h"
-
-CameraClient::CameraClient(QObject *parent) : QObject(parent) {
-    m_socket = new QTcpSocket(this);
-    connect(m_socket, &QTcpSocket::connected, this, &CameraClient::connected);
-    connect(m_socket, &QTcpSocket::readyRead, this, &CameraClient::readServer);
-}
-
-void CameraClient::connectToServer(const QString &host, quint16 port) {
-    m_socket->connectToHost(QHostAddress(host), port);
-}
-
-void CameraClient::requestImage() {
-    if (m_socket->state() == QAbstractSocket::ConnectedState) {
-        QByteArray request;
-        QDataStream stream(&request, QIODevice::WriteOnly);
-        stream.setByteOrder(QDataStream::BigEndian);
-        stream << quint8(0x27) << quint8(0x03) << quint16(++m_message_id) << quint32(0);
-        m_socket->write(request);
-        m_socket->flush();
-    }
-}
-
-void CameraClient::setParam(const QString &paramName, const QString &paramValue) {
-    if (m_socket->state() == QAbstractSocket::ConnectedState) {
-        QByteArray payload;
-        QDataStream stream(&payload, QIODevice::WriteOnly);
-        stream.setByteOrder(QDataStream::BigEndian);
-        stream << paramName << paramValue;
-        QByteArray request;
-        QDataStream requestStream(&request, QIODevice::WriteOnly);
-        requestStream.setByteOrder(QDataStream::BigEndian);
-        requestStream << quint8(0x27) << quint8(0x01) << quint16(++m_message_id) << payload.size();
-        m_socket->write(request);
-        m_socket->write(payload);
-        m_socket->flush();
-    }
-}
-
-void CameraClient::getParam(const QString &paramName) {
-    if (m_socket->state() == QAbstractSocket::ConnectedState) {
-        QByteArray payload;
-        QDataStream stream(&payload, QIODevice::WriteOnly);
-        stream.setByteOrder(QDataStream::BigEndian);
-        stream << paramName;
-        QByteArray request;
-        QDataStream requestStream(&request, QIODevice::WriteOnly);
-        requestStream.setByteOrder(QDataStream::BigEndian);
-        requestStream << quint8(0x27) << quint8(0x02) << quint16(++m_message_id) << payload.size();
-        m_socket->write(request);
-        m_socket->write(payload);
-        m_socket->flush();
-    }
-}
-
-void CameraClient::connected() {
-    qDebug() << __func__;
-}
-
-void CameraClient::readServer() {
-    m_buffer.append(m_socket->readAll());
-
-    if (m_reading_header && m_buffer.size() >= 8) {
-        QDataStream headerStream(m_buffer);
-        headerStream.setByteOrder(QDataStream::BigEndian);
-        headerStream >> m_header.fixedByte;
-        if (m_header.fixedByte != 0x27) {
-            qDebug() << "Invalid fixed byte:" << m_header.fixedByte;
-            return;
-        }
-        headerStream >> m_header.messageType;
-        headerStream >> m_header.messageId;
-        headerStream >> m_header.payloadLength;
-        m_reading_header = false;
-        m_buffer.remove(0, 8);
-    }
-
-    if (!m_reading_header && m_buffer.size() >= int(m_header.payloadLength)) {
-        QByteArray payload = m_buffer.left(m_header.payloadLength);
-        m_buffer.remove(0, m_header.payloadLength);
-        switch (m_header.messageType) {
-        case SET_PARAM: {
-            qDebug() << "Set parameter response received, messageId:" << m_header.messageId;
-            break;
-        }
-        case GET_PARAM: {
-            QDataStream payloadStream(payload);
-            payloadStream.setByteOrder(QDataStream::BigEndian);
-            QString paramName;
-            QString paramValue;
-            payloadStream >> paramName >> paramValue;
-            if(paramName == "brightness") {
-                emit brightness_signal(paramValue);
-            }
-            break;
-        }
-        case GET_IMAGE: {
-            QImage image(640, 480, QImage::Format_RGB32);
-            image.loadFromData(payload, "PNG");
-            emit send_image(image);
-            break;
-        }
-        default:
-            qDebug() << "Unknown message type:" << m_header.messageType;
-        }
-        m_header.fixedByte = 0;
-        m_header.messageType = 0;
-        m_header.messageId = 0;
-        m_header.payloadLength = 0;
-        m_reading_header = true;
-    }
-}
-```
-
-
-
 先运行 Server 再运行 Client，截图如下
 ![image-20240618181448776](image-20240618181448776.png)
 
@@ -694,3 +117,58 @@ void CameraClient::readServer() {
 
 Server 和 Client 处理数据的逻辑是很相似的。
 
+CameraServer::readClient 和 CameraClient::readServer 即服务端和客户端最核心的逻辑。
+
+代码非常浅显，这里就不多赘述。
+
+我们主要来看下客户端的多线程部分。
+
+这里的 MainWindow 就相当于 Controller，CameraClient 就相当于 Worker
+
+注意，CameraClient 在 new 的时候，不要这样写：m_camera_client = new CameraClient(this);
+
+应该这样，构造函数参数为空：m_camera_client = new CameraClient;
+
+然后不要忘记在 MainWindow 的析构里添加 quit 和 wait
+
+注意，先 quit 再 wait，这样才是优雅地退出线程的写法
+
+最后，也是最重要的，关于函数调用的方式
+
+比如我在主线程（即 MainWindow 所在线程），想通过子线程发送命令给服务端
+
+我们不能通过指针 m_camera_client 直接调用 requestImage 函数
+
+而应该先在 new 完 m_camera_client 的下一行（即 MainWindow 的构造函数），
+
+写 connect(this, &MainWindow::requestImage, m_camera_client, &CameraClient::requestImage); 类似的代码
+
+注意这个 this，一般非多线程的情况，我们很少让 this 发信号是吧 (#^.^#)
+
+然后在 MainWindow 想调用 requestImage 函数的地方（我这里是 pushButton_2 按钮点击时），emit 一个信号，
+
+当然，这个信号肯定要在 MainWindow 的头文件里用 signals 声明一下
+
+这样对应的槽函数就会在子线程的队列中依次执行，实现多线程之间异步的通信。
+
+需要强调的是，虽然 m_camera_client 已经 moveToThread 了，
+
+但如果你直接通过指针访问 m_camera_client 的函数，它是在主线程运行的，
+
+只有通过信号槽的方式，函数才会在子线程运行。
+
+当然，原先 public 的函数，要改成 public slots 的槽函数
+
+ 
+
+Qt 的多线程写起来很简单，啰嗦了这么多，主要是因为屡次看到别人写的稀奇古怪的 Qt 代码
+
+比如在 run 里 new 一个 QTcpSocket，再加一个 exec 阻塞。
+
+比如使用 event2/event.h 去写 callback 或者 用 std::thread + std::function 去写回调函数。
+
+比如 this 发信号后再用 this 接收信号。
+
+本质上都是对 Qt 信号槽以及 QThread 不够了解。
+
+ 

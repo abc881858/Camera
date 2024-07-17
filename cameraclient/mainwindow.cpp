@@ -12,7 +12,6 @@ MainWindow::MainWindow(QWidget *parent)
     workerC.moveToThread(&threadC);
     workerD.moveToThread(&threadD);
 
-    connect(&threadA, &QThread::finished, &workerA, &CameraClient::deleteLater);
     connect(this, &MainWindow::connectToServer, &workerA, &CameraClient::connectToServer);
     connect(this, &MainWindow::requestImage, &workerA, &CameraClient::requestImage);
     connect(this, &MainWindow::setParam, &workerA, &CameraClient::setParam);

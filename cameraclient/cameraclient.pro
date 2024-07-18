@@ -7,16 +7,14 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     workerb.cpp \
-    workerc.cpp \
-    workerd.cpp
+    workerc.cpp
 
 HEADERS += \
     cameraclient.h \
     mainwindow.h \
     packet.h \
     workerb.h \
-    workerc.h \
-    workerd.h
+    workerc.h
 
 FORMS += \
     mainwindow.ui

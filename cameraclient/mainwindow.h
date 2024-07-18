@@ -7,7 +7,6 @@
 #include "cameraclient.h"
 #include "workerb.h"
 #include "workerc.h"
-#include "workerd.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -24,16 +23,16 @@ private:
     CameraClient workerA;
     WorkerB workerB;
     WorkerC workerC;
-    WorkerD workerD;
     QThread threadA;
     QThread threadB;
     QThread threadC;
-    QThread threadD;
     QMutex mutex;
     bool workerBHandled{false};
     bool workerCHandled{false};
+    QImage m_image1;
+    QImage m_image2;
+    int frameCount{0};
 public slots:
-    void image_slot(QImage image);
     void brightness_slot(QString str);
     void data_b_slot(QImage image);
     void data_c_slot(QImage image);
@@ -47,5 +46,4 @@ signals:
     void requestImage();
     void setParam(QString, QString);
     void getParam(QString);
-    void data_d_signal();
 };
